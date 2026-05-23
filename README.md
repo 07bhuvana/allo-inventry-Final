@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Allo — Inventory & Reservation Platform
 
 A Next.js 14 application that solves the **checkout race condition** in multi-warehouse retail: temporary stock reservations with automatic expiry, concurrency-safe locking, and idempotent endpoints.
@@ -287,3 +288,6 @@ curl -X POST http://localhost:3000/api/reservations/RES_ID/release | jq .
 - **Reservation cleanup backoff** — cron every minute is coarse; with more SKUs, a queue-based approach (BullMQ + Redis) scales better.
 - **Stock history / audit log** — track every increment/decrement with who/why.
 - **Multi-quantity concurrency tests** — Jest + Supertest to verify two concurrent requests for the last unit produce exactly one 201 and one 409.
+=======
+# allo-inventry-Final
+>>>>>>> a8e1b0c7db3403a35d27a34b705b959e9c927eb2
