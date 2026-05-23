@@ -1,293 +1,357 @@
-<<<<<<< HEAD
-# Allo — Inventory & Reservation Platform
+# Allo — Inventory & Order Fulfillment Platform
 
-A Next.js 14 application that solves the **checkout race condition** in multi-warehouse retail: temporary stock reservations with automatic expiry, concurrency-safe locking, and idempotent endpoints.
-
----
-
-## Live Demo
-
-> Deploy URL goes here after deployment
+> **Submitted by:** Bhuvaneswari N &nbsp;|&nbsp; **Register Number:** 22MIS0578
 
 ---
 
-## Architecture Overview
+## 🧩 Problem Statement
+
+In multi-warehouse retail, checkout creates a race condition: payment flows (3DS, UPI, wallet redirects) can take several minutes. Without a reservation layer, two customers can pay for the same physical unit simultaneously — one gets a refund, the other a broken experience.
+
+**This platform solves it with temporary stock reservations:**
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  Browser (Next.js App Router)                           │
-│  /           → Product listing + Reserve modal          │
-│  /reservations/[id] → Checkout + countdown + actions    │
-└──────────────────────────┬──────────────────────────────┘
-                           │ fetch()
-┌──────────────────────────▼──────────────────────────────┐
-│  Next.js API Routes                                     │
-│  GET  /api/products          List + lazy expiry         │
-│  GET  /api/warehouses        Warehouse list             │
-│  POST /api/reservations      Create reservation ← LOCK  │
-│  GET  /api/reservations/[id] Fetch single               │
-│  POST /api/reservations/[id]/confirm   Confirm (410)    │
-│  POST /api/reservations/[id]/release   Cancel           │
-│  GET  /api/cron/expire       Vercel Cron cleanup        │
-└──────────┬─────────────────────────────┬────────────────┘
-           │                             │
-┌──────────▼──────────┐   ┌─────────────▼──────────────┐
-│  Supabase Postgres  │   │  Upstash Redis              │
-│  (Prisma ORM)       │   │  Distributed lock           │
-│                     │   │  Idempotency cache          │
-│  warehouses         │   │  key: lock:productId:whId   │
-│  products           │   └────────────────────────────┘
-│  stock_levels       │
-│  reservations       │
-│  idempotency_records│
-└─────────────────────┘
+Customer checks out  →  Units held for 10 minutes  →  Payment succeeds → Confirmed ✅
+                                                    →  Timer runs out  → Released  🔄
+                                                    →  User cancels    → Released  🔄
 ```
 
 ---
 
-## Concurrency Strategy
+## 🌐 Live Demo
 
-**The core problem:** Two requests arrive simultaneously for the last unit of SKU-HEADPH-001 at Mumbai warehouse. Without a lock, both read `available = 1`, both pass the check, and both decrement — resulting in `reservedUnits = 2` against `totalUnits = 1`.
-
-**Solution: Redis distributed lock + Postgres transaction**
-
-```
-Request A                          Request B
-  │                                  │
-  ├── acquireLock("stock:P1:W1") ✓   ├── acquireLock("stock:P1:W1") ✗ → 409
-  ├── SELECT stockLevel (inside lock)│
-  ├── available = 1 ≥ 1 ✓           │
-  ├── BEGIN TRANSACTION              │
-  ├──   UPDATE reservedUnits += 1    │
-  ├──   INSERT reservation           │
-  ├── COMMIT                         │
-  └── releaseLock()                  │
-```
-
-The lock key is scoped to `productId + warehouseId`, so requests for different SKUs/warehouses don't block each other. Lock TTL is 10s to prevent deadlocks on crash.
-
-Why not just use Postgres `SELECT FOR UPDATE`? That works too, and is noted as an alternative in Trade-offs below. Redis gives us sub-millisecond lock acquisition without holding a Postgres connection open.
+> https://your-vercel-url.vercel.app ← replace after deployment
 
 ---
 
-## Expiry Mechanism
+## 🛠 Tech Stack
 
-Two complementary approaches:
+| Layer | Technology | Why |
+|-------|-----------|-----|
+| Framework | Next.js 14 (App Router) | Full-stack, serverless-ready |
+| Language | TypeScript (end-to-end) | Type safety across API + UI |
+| Database | Supabase (hosted PostgreSQL) | Managed, free tier, reliable |
+| ORM | Prisma | Type-safe queries + migrations |
+| Distributed Lock | Upstash Redis | Sub-ms locking, no open connections |
+| Validation | Zod | Shared schemas across API + forms |
+| Styling | Tailwind CSS | Rapid, consistent UI |
+| Deployment | Vercel + Vercel Cron | Zero-config, cron built-in |
 
-### 1. Lazy cleanup (always active)
-`GET /api/products` runs `releaseExpiredReservations()` before computing available stock. This means any visitor to the products page will trigger cleanup — no background worker needed for correctness.
+---
 
-### 2. Vercel Cron (production)
-`vercel.json` schedules `GET /api/cron/expire` every minute. This ensures cleanup happens even if nobody visits the products page.
+## 🗂 Project Structure
 
-```json
-{
-  "crons": [{ "path": "/api/cron/expire", "schedule": "* * * * *" }]
+```
+allo-inventory/
+├── prisma/
+│   ├── schema.prisma              ← 5 models: Warehouse, Product, StockLevel,
+│   │                                           Reservation, IdempotencyRecord
+│   └── seed.ts                    ← 3 warehouses · 5 products · 13 stock entries
+│
+├── src/
+│   ├── app/
+│   │   ├── page.tsx               ← Product listing + Reserve modal
+│   │   ├── layout.tsx             ← App shell + sticky header
+│   │   ├── globals.css
+│   │   ├── reservations/
+│   │   │   └── [id]/page.tsx      ← Checkout page + live countdown + actions
+│   │   └── api/
+│   │       ├── products/          ← GET  /api/products
+│   │       ├── warehouses/        ← GET  /api/warehouses
+│   │       ├── reservations/      ← POST /api/reservations  ← 🔒 LOCK HERE
+│   │       │   └── [id]/
+│   │       │       ├── route.ts   ← GET  /api/reservations/:id
+│   │       │       ├── confirm/   ← POST /api/reservations/:id/confirm
+│   │       │       └── release/   ← POST /api/reservations/:id/release
+│   │       └── cron/expire/       ← GET  /api/cron/expire (Vercel Cron)
+│   │
+│   └── lib/
+│       ├── prisma.ts              ← Prisma singleton (dev-safe)
+│       ├── redis.ts               ← Upstash REST client + withLock()
+│       ├── expiry.ts              ← releaseExpiredReservations()
+│       ├── idempotency.ts         ← Idempotency key middleware
+│       └── schemas.ts             ← Zod validation schemas
+│
+├── .env.example
+├── vercel.json                    ← Cron: every minute
+└── README.md
+```
+
+---
+
+## 🔌 API Reference
+
+| Method | Path | Description | Error Codes |
+|--------|------|-------------|-------------|
+| `GET` | `/api/products` | List products with available stock per warehouse | — |
+| `GET` | `/api/warehouses` | List all warehouses | — |
+| `POST` | `/api/reservations` | Reserve units for a product/warehouse | `409` if insufficient stock |
+| `GET` | `/api/reservations/:id` | Fetch single reservation | `404` if not found |
+| `POST` | `/api/reservations/:id/confirm` | Confirm reservation (payment succeeded) | `410` if expired |
+| `POST` | `/api/reservations/:id/release` | Release reservation early | `409` if already confirmed |
+
+---
+
+## 🗄 Data Model
+
+```
+Warehouse  1 ──────* StockLevel *────── 1 Product
+                        │
+                        * Reservation
+```
+
+```prisma
+StockLevel {
+  totalUnits    Int   // physical units in warehouse
+  reservedUnits Int   // currently held by PENDING reservations
+  // availableUnits = totalUnits - reservedUnits
+}
+
+Reservation {
+  status     PENDING | CONFIRMED | RELEASED
+  expiresAt  DateTime
 }
 ```
 
-The cron endpoint is protected by `Authorization: Bearer $CRON_SECRET`.
+**State transitions:**
+
+| Event | totalUnits | reservedUnits |
+|-------|-----------|--------------|
+| Reserve | unchanged | +quantity |
+| Confirm | −quantity | −quantity |
+| Release / Expire | unchanged | −quantity |
 
 ---
 
-## Idempotency (Bonus)
+## ⚡ Concurrency Strategy
+
+> **The core problem:** Two requests arrive simultaneously for the last unit of a SKU. Both read `available = 1`, both pass the check, both decrement — overselling occurs.
+
+**Solution: Redis distributed lock + Prisma atomic transaction**
+
+```
+Request A                              Request B
+  │                                       │
+  ├─ acquireLock("stock:P1:W1")  ✅       ├─ acquireLock("stock:P1:W1")  ❌ → 409
+  ├─ SELECT stockLevel  (consistent read) │
+  ├─ available = 1 ≥ 1  ✅               │
+  ├─ BEGIN TRANSACTION                    │
+  │    UPDATE reservedUnits += 1          │
+  │    INSERT reservation                 │
+  ├─ COMMIT                               │
+  └─ releaseLock()                        │
+```
+
+**Key design decisions:**
+- Lock key scoped to `productId + warehouseId` → parallel requests for different SKUs don't block each other
+- Lock TTL = 10s → auto-releases on crash, no deadlocks
+- Stock is re-read **inside** the lock → no stale read possible
+- Prisma `$transaction([...])` → stock update + reservation insert are atomic
+
+**Why Redis over `SELECT FOR UPDATE`?**
+Both are correct. Redis gives sub-millisecond lock acquisition without holding a Postgres connection open during the lock window. `SELECT FOR UPDATE` is a valid alternative that removes the Redis dependency — noted in Trade-offs.
+
+---
+
+## ⏱ Expiry Mechanism
+
+Two complementary mechanisms — neither depends on the other for correctness:
+
+### 1. Lazy Cleanup *(always active)*
+Every `GET /api/products` call runs `releaseExpiredReservations()` before computing available stock. Any visitor to the products page triggers cleanup automatically.
+
+### 2. Vercel Cron *(production)*
+`vercel.json` schedules `GET /api/cron/expire` every minute:
+
+```json
+{
+  "crons": [{ "path": "/api/cron/expire", "schedule": "0 0 * *" }]
+}
+```
+
+The endpoint is protected: `Authorization: Bearer $CRON_SECRET`
+
+Cleanup logic:
+1. Find all `PENDING` reservations where `expiresAt < now`
+2. Batch update `status = RELEASED`
+3. Decrement `reservedUnits` on each affected `StockLevel`
+4. All in a single Prisma transaction
+
+---
+
+## 🔁 Idempotency *(Bonus)*
 
 Pass `Idempotency-Key: <uuid>` header on `POST /api/reservations` or `POST /api/reservations/:id/confirm`.
 
-On first call: execute normally, store `{ key, endpoint, statusCode, responseBody }` in `idempotency_records`.
-
-On retry with same key: return stored response immediately, skipping all side effects.
-
-Records are never deleted (in production you'd set a 24h TTL or cron cleanup).
-
----
-
-## Data Model
-
-```prisma
-Warehouse  1───* StockLevel *───1 Product
-                    │
-                    1
-                    │
-                    * Reservation
+```
+First call  (key: abc-123)  →  Execute + store { key, statusCode, responseBody }
+Retry call  (key: abc-123)  →  Return stored response, skip all side effects
 ```
 
-`StockLevel.availableUnits = totalUnits - reservedUnits`
-
-- **PENDING reservation**: units are held (`reservedUnits` incremented)
-- **CONFIRMED reservation**: units are permanently removed (`totalUnits` decremented, `reservedUnits` decremented)
-- **RELEASED reservation**: units return (`reservedUnits` decremented only)
+Stored in `idempotency_records` table in Postgres. Durable across restarts. In production, a 24h TTL cleanup cron would be added.
 
 ---
 
-## Running Locally
+## 🚀 Local Setup
 
-### 1. Prerequisites
+### Prerequisites
 - Node.js 18+
-- A Supabase account (free tier works)
-- An Upstash account (free tier works)
+- Supabase account → [supabase.com](https://supabase.com) (free)
+- Upstash account → [upstash.com](https://upstash.com) (free)
 
-### 2. Clone and install
+### Steps
+
 ```bash
-git clone <repo-url>
-cd allo-inventory
+# 1. Install dependencies
 npm install
+
+# 2. Copy and fill environment file
+cp .env.example .env
+
+# 3. Generate Prisma client
+npx prisma generate
+
+# 4. Push schema to Supabase (creates all tables)
+npx prisma db push
+
+# 5. Seed the database
+npm run db:seed
+
+# 6. Start dev server
+npm run dev
+# → http://localhost:3000
 ```
 
-### 3. Configure environment variables
-```bash
-cp .env.example .env.local
-```
+### Environment Variables (`.env`)
 
-Fill in:
 ```env
-# From Supabase → Project Settings → Database → Connection String
+# ── Supabase ─────────────────────────────────────────────────────────────────
+# Settings → Database → Connect → URI (port 6543 = pooler, port 5432 = direct)
 DATABASE_URL="postgresql://postgres.[ref]:[password]@aws-0-ap-south-1.pooler.supabase.com:6543/postgres?pgbouncer=true"
 DIRECT_URL="postgresql://postgres.[ref]:[password]@aws-0-ap-south-1.pooler.supabase.com:5432/postgres"
 
-# From Upstash → Redis → REST API
+# ── Upstash Redis ─────────────────────────────────────────────────────────────
+# Redis dashboard → REST API tab
 UPSTASH_REDIS_REST_URL="https://your-instance.upstash.io"
 UPSTASH_REDIS_REST_TOKEN="your-token"
 
-# Any random string for cron auth
-CRON_SECRET="some-random-secret"
-
-# Optional: override the 10-minute window
+# ── App config ────────────────────────────────────────────────────────────────
+CRON_SECRET="any-random-string"
 RESERVATION_WINDOW_MINUTES=10
 ```
 
-### 4. Push schema and seed
+---
+
+## ☁️ Supabase Setup
+
+1. [supabase.com](https://supabase.com) → New Project → choose `ap-south-1` (India)
+2. Settings → Database → **Connect** button (top of page) → **ORMs** tab
+3. Copy `DATABASE_URL` (port 6543) and `DIRECT_URL` (port 5432)
+4. Paste into `.env` with your password
+5. Run `npx prisma db push` → tables created
+6. Run `npm run db:seed` → data populated
+7. Verify in **Table Editor**: `warehouses` `products` `stock_levels` `reservations`
+
+---
+
+## 🟢 Upstash Redis Setup
+
+1. [upstash.com](https://upstash.com) → Create Database → Redis
+2. Name: `allo-locks` · Region: `ap-southeast-1`
+3. **REST API** tab → copy URL and token into `.env`
+
+---
+
+## 🌍 Deploy to Vercel
+
 ```bash
-npm run db:generate   # Generate Prisma client
-npm run db:push       # Push schema to Supabase
-npm run db:seed       # Seed with warehouses, products, stock
+# Push to GitHub
+git init && git add . && git commit -m "feat: allo inventory platform"
+git remote add origin https://github.com/YOUR/allo-inventory.git
+git push -u origin main
 ```
 
-### 5. Run dev server
+1. [vercel.com](https://vercel.com) → Import Project → select repo
+2. Add all env vars from `.env` in the Vercel dashboard
+3. Deploy → Vercel auto-detects Next.js
+4. After deploy: run `npm run db:seed` locally (with prod env vars set) to seed production DB
+
+---
+
+## 🧪 Testing Guide
+
+### ✅ Happy Path
+1. Open `http://localhost:3000` → 5 products with per-warehouse stock
+2. Click **Reserve** → select warehouse → set quantity → **Reserve — 10 min hold**
+3. Checkout page opens with **live countdown timer**
+4. Click **Confirm purchase** → status changes to "Order confirmed" **without page refresh**
+5. Back to products → stock count decreased ✅
+
+### 🔴 409 — Race Condition / Out of Stock
+1. Find a product with **1 unit** (Mechanical Keyboard → Mumbai warehouse)
+2. Open **two browser tabs** on the same product
+3. Click Reserve simultaneously in both tabs
+4. **One tab** → checkout page ✅
+5. **Other tab** → red error: *"Only 0 unit(s) available"* ✅
+
+### ⏱ 410 — Expired Reservation
+1. Set `RESERVATION_WINDOW_MINUTES=1` in `.env` → restart server
+2. Reserve any product → wait for countdown to hit 0
+3. Click **Confirm purchase** → red error: *"Reservation has expired"* ✅
+
+### 🔁 Idempotency Test
 ```bash
-npm run dev
-# Open http://localhost:3000
-```
-
----
-
-## Supabase Setup (Step-by-Step)
-
-1. Go to [supabase.com](https://supabase.com) → New project
-2. Choose a region close to you (ap-south-1 for India)
-3. Note your database password
-4. Go to **Project Settings → Database**
-5. Copy the **Connection Pooler** string (port 6543) → `DATABASE_URL`
-6. Copy the **Direct connection** string (port 5432) → `DIRECT_URL`
-7. Append `?pgbouncer=true` to `DATABASE_URL`
-8. Run `npm run db:push` — this creates all tables
-9. Run `npm run db:seed` — this populates test data
-10. Verify in **Table Editor** that you see data in `warehouses`, `products`, `stock_levels`
-
----
-
-## Upstash Setup (Step-by-Step)
-
-1. Go to [upstash.com](https://upstash.com) → Create Database → Redis
-2. Choose region (eu-west-1 or ap-southeast-1 are fine for testing)
-3. Go to **REST API** tab
-4. Copy `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`
-5. Add both to `.env.local`
-
----
-
-## Deploying to Vercel
-
-1. Push repo to GitHub
-2. Import project at [vercel.com](https://vercel.com)
-3. Add all env vars from `.env.local` in Vercel dashboard
-4. Add `CRON_SECRET` as well
-5. Deploy — Vercel auto-detects Next.js
-6. After deploy, run seed against prod DB: set env vars locally and `npm run db:seed`
-
----
-
-## Testing the Full Flow
-
-### Manual happy path
-1. Open `http://localhost:3000`
-2. Click **Reserve** on any product with stock
-3. Select a warehouse → set quantity → click **Reserve — 10 min hold**
-4. You land on the checkout page with a live countdown
-5. Click **Confirm purchase** → status changes to "Order confirmed" without page refresh
-6. Go back to products → stock count has decreased
-
-### Testing 409 (race condition / out of stock)
-1. Find a product with only 1 unit (e.g. Mechanical Keyboard at Mumbai)
-2. Open two browser tabs
-3. Click Reserve on both simultaneously
-4. One should succeed (201), the other should show a red 409 error
-
-### Testing 410 (expired reservation)
-1. Set `RESERVATION_WINDOW_MINUTES=1` (or even lower with a code change)
-2. Create a reservation
-3. Wait for the countdown to reach 0
-4. Click **Confirm purchase** → should get the 410 expired error
-
-### Testing idempotency
-```bash
-# First call
+# Run twice — only ONE reservation should appear in Supabase
 curl -X POST http://localhost:3000/api/reservations \
   -H "Content-Type: application/json" \
-  -H "Idempotency-Key: test-key-abc123" \
-  -d '{"productId":"<id>","warehouseId":"<id>","quantity":1}'
-
-# Same key again — returns identical response, no second reservation created
-curl -X POST http://localhost:3000/api/reservations \
-  -H "Content-Type: application/json" \
-  -H "Idempotency-Key: test-key-abc123" \
-  -d '{"productId":"<id>","warehouseId":"<id>","quantity":1}'
+  -H "Idempotency-Key: test-key-001" \
+  -d '{"productId":"PROD_ID","warehouseId":"WH_ID","quantity":1}'
 ```
 
-### Testing cron expiry
+### 🕐 Cron Expiry Test
 ```bash
-curl -H "Authorization: Bearer $CRON_SECRET" \
+curl -H "Authorization: Bearer YOUR_CRON_SECRET" \
   http://localhost:3000/api/cron/expire
-# Returns: {"released": N, "timestamp": "..."}
+# → {"released": 2, "timestamp": "2024-..."}
 ```
 
-### API smoke tests (curl)
-```bash
-# List products
-curl http://localhost:3000/api/products | jq .
-
-# List warehouses
-curl http://localhost:3000/api/warehouses | jq .
-
-# Reserve
-curl -X POST http://localhost:3000/api/reservations \
-  -H "Content-Type: application/json" \
-  -d '{"productId":"PROD_ID","warehouseId":"WH_ID","quantity":1}' | jq .
-
-# Confirm
-curl -X POST http://localhost:3000/api/reservations/RES_ID/confirm | jq .
-
-# Release
-curl -X POST http://localhost:3000/api/reservations/RES_ID/release | jq .
+### 🔍 API Smoke Test (browser)
 ```
+http://localhost:3000/api/products
+http://localhost:3000/api/warehouses
+```
+
+### 📋 Verify in Supabase Table Editor
+After each action, check the `reservations` table:
+
+| Action | Expected `status` |
+|--------|------------------|
+| Reserved | `PENDING` |
+| Confirmed | `CONFIRMED` |
+| Cancelled | `RELEASED` |
+| Expired | `RELEASED` |
 
 ---
 
-## Trade-offs & What I'd Do Differently
+## ⚖️ Trade-offs & What I'd Do Differently
 
-### What I chose and why
-- **Redis SET NX EX for locking** — simple, sub-ms, no Postgres connection held open. Alternative is `SELECT FOR UPDATE` inside a transaction, which is equally correct and removes the Redis dependency. With more time I'd benchmark both.
-- **Lazy expiry on GET /products** — ensures correctness even without the cron. The cron is additive, not load-bearing.
-- **Prisma transactions** — stock update + reservation creation are atomic. No partial state.
-- **Idempotency in Postgres** — simple and durable; Redis would be faster but adds TTL complexity.
+### Decisions made
+
+| Decision | Rationale |
+|----------|-----------|
+| Redis SET NX EX for locking | Sub-ms, no Postgres connection held open; `SELECT FOR UPDATE` is equally correct but holds a connection |
+| Lazy expiry on `GET /api/products` | Correctness doesn't depend on cron — cron is additive, not load-bearing |
+| Prisma `$transaction` | Stock update + reservation insert are atomic — no partial state |
+| Idempotency in Postgres | Durable across restarts; Redis would be faster but adds TTL complexity |
 
 ### Given more time
-- **`SELECT FOR UPDATE` fallback** — if Redis is unavailable, fall back to Postgres-level locking rather than returning 409. More resilient.
-- **Optimistic locking with version column** — retry loop instead of lock; better for very high throughput.
-- **Webhook simulation for payment** — currently "Confirm" is immediate. Real flow would be async: reserve → redirect to payment provider → receive webhook → confirm.
-- **Reservation cleanup backoff** — cron every minute is coarse; with more SKUs, a queue-based approach (BullMQ + Redis) scales better.
-- **Stock history / audit log** — track every increment/decrement with who/why.
-- **Multi-quantity concurrency tests** — Jest + Supertest to verify two concurrent requests for the last unit produce exactly one 201 and one 409.
-=======
-# allo-inventry-Final
->>>>>>> a8e1b0c7db3403a35d27a34b705b959e9c927eb2
+- **Jest + Supertest concurrency tests** — programmatically fire two simultaneous requests and assert exactly one 201 and one 409
+- **`SELECT FOR UPDATE` fallback** — if Redis is unavailable, fall back to Postgres-level locking instead of failing
+- **Payment webhook simulation** — real flow is async: reserve → redirect to payment provider → receive webhook → confirm
+- **Stock audit log** — track every increment/decrement with timestamp, actor, reason
+- **Queue-based expiry** — BullMQ + Redis for high-SKU scenarios where per-minute cron is too coarse
+
+---
+
+*Submitted as part of the Allo Engineering take-home exercise.*  
+*— Bhuvaneswari N · 22MIS0578*
