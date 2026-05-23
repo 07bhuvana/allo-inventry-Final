@@ -20,7 +20,7 @@ Customer checks out  →  Units held for 10 minutes  →  Payment succeeds → C
 
 ## 🌐 Live Demo
 
->https://allo-inventry-final-x4fb.vercel.app/
+>https://allo-inventry-final.vercel.app/
 
 ---
 
