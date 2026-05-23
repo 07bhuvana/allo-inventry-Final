@@ -20,7 +20,7 @@ Customer checks out  →  Units held for 10 minutes  →  Payment succeeds → C
 
 ## 🌐 Live Demo
 
-> https://your-vercel-url.vercel.app ← replace after deployment
+>https://allo-inventry-final-x4fb.vercel.app/
 
 ---
 
