@@ -1,6 +1,6 @@
 # Allo — Inventory & Order Fulfillment Platform
 
-> **Submitted by:**Bhuvaneswari N &nbsp;|&nbsp; **Register Number:** 22MIS0578
+> **Submitted by:** Bhuvaneswari N &nbsp;|&nbsp; **Register Number:** 22MIS0578
 
 ---
 
